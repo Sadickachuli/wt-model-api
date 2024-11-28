@@ -1,3 +1,9 @@
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+import tensorflow as tf
+
 import pickle
 import pandas as pd
 from fastapi import FastAPI, HTTPException, File, UploadFile
