@@ -1,19 +1,12 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-import tensorflow as tf
-
 import pickle
-import pandas as pd
+import pandas as pd  # Import pandas for data manipulation
+import tensorflow as tf
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from pydantic import BaseModel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-from tensorflow.keras.models import load_model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model, model_from_json
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -34,18 +27,32 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Load initial model pipeline
-MODEL_PATH = "water_potability_model.pkl"
+# Path to your model file and dataset
+MODEL_PATH = "water_potability_model.pkl"  # Your initial pickle model file
+MODEL_KERAS_PATH = "water_potability_model.keras"  # Path for the converted .keras model
+DATASET_PATH = "data/water_potability.csv"
 
-try:
-    with open(MODEL_PATH, "rb") as file:
-        pipeline = pickle.load(file)
-except FileNotFoundError:
-    raise RuntimeError(f"Model file {MODEL_PATH} not found.")
+# Load initial model (pickle format)
+def load_pickled_model():
+    try:
+        with open(MODEL_PATH, "rb") as file:
+            model = pickle.load(file)
+            return model
+    except FileNotFoundError:
+        raise RuntimeError(f"Model file {MODEL_PATH} not found.")
+        
+# Convert pickled model to Keras format (if necessary)
+def convert_to_keras(model):
+    if isinstance(model, tf.keras.models.Model):
+        model.save(MODEL_KERAS_PATH)  # Directly save Keras model
+    else:
+        raise ValueError("Model is not a Keras model, cannot convert it.")
 
-# Placeholder for dataset
-DATASET_PATH = "data/water_potability.csv"  
+# Try loading the model or convert it to .keras format
+model = load_pickled_model()
+convert_to_keras(model)
 
+# Define the schema for water sample input
 class WaterSample(BaseModel):
     """Schema for a water sample prediction input."""
     pH: float
@@ -64,7 +71,7 @@ def predict_potability(sample: WaterSample):
     """Endpoint to predict water potability."""
     try:
         input_data = pd.DataFrame([sample.dict()])
-        prediction = pipeline.predict(input_data)
+        prediction = model.predict(input_data)
         potability = "Potable" if prediction[0] > 0.5 else "Not Potable"
         return {"potability": potability}
     except Exception as e:
@@ -83,6 +90,9 @@ def retrain_model(file: UploadFile = File(...)):
         # Split into features and labels
         X = new_data.drop("Potability", axis=1)
         y = new_data["Potability"]
+
+        # Handle missing values (Fill with the mean of each column)
+        X = X.fillna(X.mean())
 
         # Train/test split
         trainX, testX, trainY, testY = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -106,23 +116,10 @@ def retrain_model(file: UploadFile = File(...)):
         # Retrain the model
         model.fit(trainX, trainY, validation_data=(testX, testY), epochs=50, batch_size=32, callbacks=[early_stopping, reduce_lr], verbose=1)
 
-        # Save the retrained model
-        model.save("retrained_model.h5")
-        with open(MODEL_PATH, "wb") as file:
-            pickle.dump(model, file)
+        # Save the retrained model in .keras format
+        model.save(MODEL_KERAS_PATH)  # Save with .keras extension
 
         accuracy = accuracy_score(testY, model.predict(testX).round())
         return {"message": "Model retrained successfully", "accuracy": accuracy}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
-
-
-@app.post("/trigger-retrain/")
-def trigger_retraining():
-    """Manually trigger retraining."""
-    # Load dataset for retraining
-    try:
-        data = pd.read_csv(DATASET_PATH)
-        return retrain_model(file=data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Retraining trigger failed: {str(e)}")
