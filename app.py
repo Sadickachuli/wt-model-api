@@ -1,18 +1,17 @@
 import os
 import pickle
-import pandas as pd  # Import pandas for data manipulation
+import pandas as pd
 import tensorflow as tf
 from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi.responses import FileResponse  
 from pydantic import BaseModel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-from tensorflow.keras.models import Sequential, load_model, model_from_json
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.regularizers import l2
-
-# Import CORS middleware
 from starlette.middleware.cors import CORSMiddleware
 
 # Define FastAPI app
@@ -21,15 +20,15 @@ app = FastAPI()
 # Allow cross-origin requests from localhost (or your frontend origin)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Allow only localhost for development
+    allow_origins=["http://localhost:3000"],  
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],  
+    allow_headers=["*"],  
 )
 
-# Path to your model file and dataset
-MODEL_PATH = "water_potability_model.pkl"  # Your initial pickle model file
-MODEL_KERAS_PATH = "water_potability_model.keras"  # Path for the converted .keras model
+# Paths to model files and dataset
+MODEL_PATH = "water_potability_model.pkl"  
+MODEL_KERAS_PATH = "water_potability_model.keras"  
 DATASET_PATH = "data/water_potability.csv"
 
 # Load initial model (pickle format)
@@ -40,8 +39,8 @@ def load_pickled_model():
             return model
     except FileNotFoundError:
         raise RuntimeError(f"Model file {MODEL_PATH} not found.")
-        
-# Convert pickled model to Keras format (if necessary)
+
+# Convert pickled model to Keras format 
 def convert_to_keras(model):
     if isinstance(model, tf.keras.models.Model):
         model.save(MODEL_KERAS_PATH)  # Directly save Keras model
@@ -114,12 +113,20 @@ def retrain_model(file: UploadFile = File(...)):
         reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=10, min_lr=0.0001)
 
         # Retrain the model
-        model.fit(trainX, trainY, validation_data=(testX, testY), epochs=50, batch_size=32, callbacks=[early_stopping, reduce_lr], verbose=1)
+        model.fit(trainX, trainY, validation_data=(testX, testY), epochs=30, batch_size=32, callbacks=[early_stopping, reduce_lr], verbose=1)
 
         # Save the retrained model in .keras format
-        model.save(MODEL_KERAS_PATH)  # Save with .keras extension
+        model.save(MODEL_KERAS_PATH)  
 
         accuracy = accuracy_score(testY, model.predict(testX).round())
         return {"message": "Model retrained successfully", "accuracy": accuracy}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
+
+
+@app.get("/download_model/")
+def download_model():
+    """Endpoint to download the retrained model."""
+    if not os.path.exists(MODEL_KERAS_PATH):
+        raise HTTPException(status_code=404, detail="Model file not found.")
+    return FileResponse(MODEL_KERAS_PATH, media_type="application/octet-stream", filename="water_potability_model.keras")
