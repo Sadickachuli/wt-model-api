@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import FileResponse  
 from pydantic import BaseModel
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
@@ -27,33 +27,17 @@ app.add_middleware(
 )
 
 # Paths to model files and dataset
-MODEL_PATH = "water_potability_model.pkl"  
 MODEL_KERAS_PATH = "water_potability_model.keras"  
 DATASET_PATH = "data/water_potability.csv"
 
-# Load initial model (pickle format)
-def load_pickled_model():
-    try:
-        with open(MODEL_PATH, "rb") as file:
-            model = pickle.load(file)
-            return model
-    except FileNotFoundError:
-        raise RuntimeError(f"Model file {MODEL_PATH} not found.")
-
-# Convert pickled model to Keras format 
-def convert_to_keras(model):
-    if isinstance(model, tf.keras.models.Model):
-        model.save(MODEL_KERAS_PATH)  # Directly save Keras model
-    else:
-        raise ValueError("Model is not a Keras model, cannot convert it.")
-
-# Try loading the model or convert it to .keras format
-model = load_pickled_model()
-convert_to_keras(model)
+# Load the Keras model if exists
+if os.path.exists(MODEL_KERAS_PATH):
+    model = tf.keras.models.load_model(MODEL_KERAS_PATH)
+else:
+    model = None
 
 # Define the schema for water sample input
 class WaterSample(BaseModel):
-    """Schema for a water sample prediction input."""
     pH: float
     Hardness: float
     Solids: float
@@ -68,6 +52,8 @@ class WaterSample(BaseModel):
 @app.post("/predict/")
 def predict_potability(sample: WaterSample):
     """Endpoint to predict water potability."""
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model not loaded.")
     try:
         input_data = pd.DataFrame([sample.dict()])
         prediction = model.predict(input_data)
@@ -118,15 +104,21 @@ def retrain_model(file: UploadFile = File(...)):
         # Save the retrained model in .keras format
         model.save(MODEL_KERAS_PATH)  
 
-        accuracy = accuracy_score(testY, model.predict(testX).round())
-        return {"message": "Model retrained successfully", "accuracy": accuracy}
+        # Model evaluation
+        predictions = model.predict(testX).round()
+        accuracy = accuracy_score(testY, predictions)
+        precision = precision_score(testY, predictions, zero_division=0)
+        recall = recall_score(testY, predictions, zero_division=0)
+        f1 = f1_score(testY, predictions, zero_division=0)
+        loss = model.evaluate(testX, testY, verbose=0)[0]
+
+        return {
+            "message": "Model retrained successfully",
+            "accuracy": accuracy,
+            "loss": loss,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
-
-
-@app.get("/download_model/")
-def download_model():
-    """Endpoint to download the retrained model."""
-    if not os.path.exists(MODEL_KERAS_PATH):
-        raise HTTPException(status_code=404, detail="Model file not found.")
-    return FileResponse(MODEL_KERAS_PATH, media_type="application/octet-stream", filename="water_potability_model.keras")
